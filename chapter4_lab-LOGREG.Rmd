@@ -1,0 +1,165 @@
+---
+title: "Chapter 4 -- Classification"
+subtitle: "Lab: Logistic regression"
+author: "Diogo M. Camacho"
+date: "`r paste('Last updated:', format(Sys.Date(), '%Y-%m-%d'))`"
+output: html_notebook
+---
+  
+
+```{r libraries, echo = FALSE}
+# libraries and data
+library(ISLR)
+library(dplyr)
+library(ggplot2)
+library(GGally)
+library(MASS)
+library(caret)
+library(readr)  
+library(corrplot)
+```
+
+This is an exploration of the `Stock Market` data to perform classification on these data.
+
+## 4.6.1 The `Stock Market` data
+The stock market data consists of percentage return for the S&P 500 stock index over 1,250 days. For any given date, the percentage return for each of the previous 5 trading days was calculated, and named `Lag1` throu `Lag5` in the data set. Additionally, `Volume` (number of shares traded on the previous day, in billions), `Today` (the percentage return on the date in question), and `Direction` (wether the market was up or down on this date)
+
+
+```{r}
+smarket <- ISLR::Smarket
+```
+
+```{r}
+head(smarket)
+```
+
+```{r}
+dim(smarket)
+```
+
+```{r}
+summary(smarket)
+```
+
+```{r}
+# pairs(smarket)
+smarket %>%
+  as_tibble %>%
+  GGally::ggpairs(columns = c("Lag1", "Lag2", "Lag3", "Lag4", "Lag5", "Volume", "Today"), alpha = 0.5, progress = FALSE)
+```
+
+Now I will use `corrplot` to display the correlation between all variable in the data set.
+
+```{r}
+smarket %>% 
+  dplyr::select(., -Direction) %>%
+  cor() %>%
+  corrplot::corrplot.mixed(., lower.col = "black")
+```
+
+We see that the only relevant correlation is between `Year` and `Volume`, which is equal to `r cor(smarket[, -9])["Year", "Volume"]`. We can plot the data to see this relationship:
+
+```{r}
+smarket %>% 
+  dplyr::select(., -Direction) %>% 
+  tibble::add_column(.,  seq_days = seq(1, nrow(smarket))) %>% 
+  ggplot(aes(x = seq_days, y = Volume)) + 
+  geom_point(color = "red", alpha = 0.5, size = 3) + 
+  labs(y = "Volume", x = "Days") + 
+  theme_bw()
+```
+
+## 4.6.2 Logistic regression
+We will now fit a logistic regression model in order to predict `Direction` using `Lag1` through `Lag5` and `Volume`. the `glm()` function fits generalized linear models to the data. These models include the logistic regression model we want. In order for the `glm()` function to fit a logistic regression model instead of any other type of linear model, we need to pass the `family = "binomial"` argument to it. Before that, I will use the `caret` package to get a good size training data. Using the `createDataPartition()` function I will generate a training set that contains 75% of the data. The way that this function works is that it will ensure that there is a good split of the data, maintaining the distribution of the labels as in the original data set.
+
+```{r}
+ids <- caret::createDataPartition(y = smarket$Direction, times = 1, p = 0.75, list = FALSE)
+```
+
+With these ids I can now get a training data and a test data:
+
+```{r}
+train_data <- smarket[ids, ]
+test_data <- smarket[-ids, ]
+```
+
+The training data will have `r dim(train_data)[1]` samples while the test data will have `r dim(test_data)[1]` samples. Now we are ready to fit a `glm()` model to the data.
+
+```{r}
+glm_fit <- glm(data = train_data,
+               form = Direction ~ Volume + Lag1 + Lag2 + Lag3 + Lag4 + Lag5,
+               family = "binomial")
+```
+
+```{r}
+summary(glm_fit)
+```
+
+We can now use the `coef()` to assess the coefficients for the fitted models:
+
+```{r}
+coef(glm_fit)
+```
+
+Using the fitted model, we can make predictions on a new data set. For that, let's use the `test_data` that we defined earlier (_NOTE: this is a deviation of what is in the book._)
+
+```{r}
+new_predictions <- predict(object = glm_fit, newdata = test_data)
+```
+
+The output of the `new_predictions` object is a probability of a given new data vector being associated with either class in our training data. An important point here: the `Direction` variable in our data set is categorical, but it is also of class character. If we look at the `contrasts()` function we see how `R` is defining the classes for the training data and, hence, the predictions:
+
+```{r}
+contrasts(smarket$Direction)
+```
+
+Very simply, if the probability is > 0.5 then the new data vector corresponds to the "Up" group, and if it's less than that it belongs to the "Down" category.  To simplify things, let's write a character vector that will illutrate which class the predictions fall into:
+
+```{r}
+pred_direction <- rep("Down", length = nrow(test_data))
+pred_direction[new_predictions > 0.5] <- "Up"
+```
+
+We can now build a confusion matrix for the logistic regression classifier:
+
+```{r}
+table(pred_direction, test_data$Direction)
+```
+
+We can calculate the accuracy of the classifier by looking at the diagonal elemnts in our confusion matrix, taking into account the size of the test data:
+
+```{r}
+cm <- table(pred_direction, test_data$Direction)
+acc <- (cm[1, 1] + cm[2, 2]) / nrow(test_data)
+paste("Logistic regression model accuracy:", acc)
+```
+
+### Variant with `caret` and cross-validation.
+Here I will implement the same strategy but I will use the `train` function from the `caret` package and use a 10-fold cross-validation in the training process to assess if that improves performance of the classifier.
+
+```{r}
+ids2 <- createDataPartition(smarket$Direction, p = 0.75, list = FALSE)
+train2 <- smarket[ids2, ]
+test2 <- smarket[-ids2, ]
+
+caret_glm_mod <- train(
+  form = Direction ~ Volume + Lag1 + Lag2 + Lag3 + Lag4 + Lag5,
+  data = train2,
+  trControl = trainControl(method = "cv", number = 10),
+  method = "glm",
+  family = "binomial"
+)
+```
+
+Using `caret` we get that the training accuracy of the model, with a 10-fold cross-validation is `r caret_glm_mod$results$Accuracy`.  We can predict new outcomes:
+
+```{r}
+caret_predictions <- predict(object = caret_glm_mod, newdata = test2)
+```
+
+```{r}
+pt2 <- table(test2$Direction, caret_predictions)
+pt2
+```
+
+which yields an accuracy of `r (pt2[1, 1] + pt2[2, 2]) / nrow(test2)` on test data using this model.

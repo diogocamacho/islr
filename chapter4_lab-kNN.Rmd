@@ -1,0 +1,100 @@
+---
+title: "Chapter 4 -- Classification"
+subtitle: "Lab: k-Nearest Neighbor"
+author: "Diogo M. Camacho"
+date: "`r paste('Last updated:', format(Sys.Date(), '%Y-%m-%d'))`"
+output: html_notebook
+---
+  
+
+```{r libraries, echo = FALSE}
+# libraries and data
+library(ISLR)
+library(dplyr)
+library(ggplot2)
+library(GGally)
+library(MASS)
+library(caret)
+library(readr)  
+library(corrplot)
+library(class)
+```
+
+This is an exploration of the `Stock Market` data to perform classification on these data.
+
+## 4.6.1 The `Stock Market` data
+The stock market data consists of percentage return for the S&P 500 stock index over 1,250 days. For any given date, the percentage return for each of the previous 5 trading days was calculated, and named `Lag1` throu `Lag5` in the data set. Additionally, `Volume` (number of shares traded on the previous day, in billions), `Today` (the percentage return on the date in question), and `Direction` (wether the market was up or down on this date)
+
+
+```{r}
+smarket <- ISLR::Smarket
+```
+
+```{r}
+head(smarket)
+```
+
+```{r}
+dim(smarket)
+```
+
+```{r}
+summary(smarket)
+```
+
+```{r}
+# pairs(smarket)
+smarket %>%
+  as_tibble %>%
+  GGally::ggpairs(columns = c("Lag1", "Lag2", "Lag3", "Lag4", "Lag5", "Volume", "Today"), alpha = 0.5, progress = FALSE)
+```
+
+Now I will use `corrplot` to display the correlation between all variable in the data set.
+
+```{r}
+smarket %>% 
+  dplyr::select(., -Direction) %>%
+  cor() %>%
+  corrplot::corrplot.mixed(., lower.col = "black")
+```
+
+We see that the only relevant correlation is between `Year` and `Volume`, which is equal to `r cor(smarket[, -9])["Year", "Volume"]`. We can plot the data to see this relationship:
+
+```{r}
+smarket %>% 
+  dplyr::select(., -Direction) %>% 
+  tibble::add_column(.,  seq_days = seq(1, nrow(smarket))) %>% 
+  ggplot(aes(x = seq_days, y = Volume)) + 
+  geom_point(color = "red", alpha = 0.5, size = 3) + 
+  labs(y = "Volume", x = "Days") + 
+  theme_bw()
+```
+
+## 4.6.5 k-NN
+We will now do the classification on the stock market using a k-nearest neighbor approach. The `kNN` classifier can be found in the `class` package as an example (at later updates I will try and do this using the `caret` package.)
+
+```{r data_splits}
+train <- smarket$Year < 2005
+
+train_X <- cbind(smarket$Lag1[train], smarket$Lag2[train])
+test_X <- cbind(smarket$Lag1[!train], smarket$Lag2[!train])
+train_direction <- smarket$Direction[train]
+```
+
+The `knn` function needs inputs on train and test data, as well as the labels on the training set, which we did in the previous chunk. Let's now build the model. 
+
+```{r knn_model}
+knn_model <- knn(train = train_X, # <-- training data
+                 test = test_X, # <-- test data
+                 cl = train_direction, # <-- training labels
+                 k = 1) # <-- number of neighbors
+```
+
+The next table shows how well we did:
+
+```{r pred_table}
+t1 <- table(knn_model, smarket$Direction[!train])
+t1
+```
+
+Looking at the diagonal of the confusion matrix we get `r (t1[1,1] + t1[2,2]) / sum(t1)` accuracy in our predictions. We can improve the predictions slightly by changing the number of neighbors. This results in an increase of accuracy to about 53% when k = 3. 
